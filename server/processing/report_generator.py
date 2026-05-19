@@ -48,82 +48,6 @@ def _resize_for_docx(img_path: str) -> str:
         return img_path
 
 
-def _create_composite_image(image_paths: list, output_path: str) -> str:
-    """
-    Creates a composite grid image.
-    1 image -> original aspect ratio, max width/height
-    >1 image -> max 2 columns, N rows, fixed grid size.
-    """
-    if not image_paths:
-        return ""
-    try:
-        from PIL import Image, ImageOps
-        images = []
-        for p in image_paths:
-            if os.path.exists(p):
-                with Image.open(p) as im:
-                    im = ImageOps.exif_transpose(im)
-                    if im.mode in ("RGBA", "P"):
-                        im = im.convert("RGB")
-                    else:
-                        im = im.convert("RGB")
-                    images.append(im.copy())
-
-        if not images:
-            return ""
-
-        if len(images) == 1:
-            im = images[0]
-            im.thumbnail((1200, 1200))
-            im.save(output_path, "JPEG", quality=85, optimize=True)
-            return output_path
-
-        # 2 or more images -> 2 columns
-        cols = 2
-        rows = (len(images) + 1) // 2
-
-        # Target cell size for each image in the grid
-        cell_w, cell_h = 600, 600
-        
-        # Grid dimensions
-        grid_w = cell_w * cols
-        grid_h = cell_h * rows
-
-        composite = Image.new("RGB", (grid_w, grid_h), "white")
-
-        for i, im in enumerate(images):
-            # Crop/resize to cell size (center crop)
-            im_aspect = im.width / im.height
-            cell_aspect = cell_w / cell_h
-            if hasattr(Image, 'Resampling'):
-                resample_filter = Image.Resampling.LANCZOS
-            else:
-                resample_filter = Image.LANCZOS
-
-            if im_aspect > cell_aspect:
-                new_w = int(im.height * cell_aspect)
-                left = (im.width - new_w) // 2
-                im = im.crop((left, 0, left + new_w, im.height))
-            elif im_aspect < cell_aspect:
-                new_h = int(im.width / cell_aspect)
-                top = (im.height - new_h) // 2
-                im = im.crop((0, top, im.width, top + new_h))
-                
-            im = im.resize((cell_w, cell_h), resample_filter)
-            
-            x = (i % cols) * cell_w
-            y = (i // cols) * cell_h
-            composite.paste(im, (x, y))
-
-        composite.save(output_path, "JPEG", quality=85, optimize=True)
-        return output_path
-    except Exception as e:
-        logger.warning("Failed to create composite image: %s", e)
-        if image_paths and os.path.exists(image_paths[0]):
-            return _resize_for_docx(image_paths[0])
-        return ""
-
-
 def generate_report(context: dict) -> str:
     template_path = os.path.abspath(TEMPLATE_PATH)
     if not os.path.exists(template_path):
@@ -156,20 +80,16 @@ def generate_report(context: dict) -> str:
         new_item = {
             "photo_obs": obs,
             "photo_rec": rec,
-            "before_image": "",
-            "after_image": "",
+            "images": [],
         }
 
         if image_paths:
-            import uuid
-            composite_filename = f"composite_{uuid.uuid4().hex[:8]}.jpg"
-            composite_path = os.path.join(os.path.dirname(image_paths[0]), composite_filename)
-            final_img_path = _create_composite_image(image_paths, composite_path)
-            
-            if final_img_path:
-                generated_temp_files.append(final_img_path)
-                # Instead of two Mm(45) images side-by-side, use one Mm(90) image
-                new_item["before_image"] = InlineImage(doc, final_img_path, width=Mm(90))
+            # Add images one by one natively, relying on Word to wrap them
+            for img_path in image_paths:
+                if os.path.exists(img_path):
+                    resized_path = _resize_for_docx(img_path)
+                    generated_temp_files.append(resized_path)
+                    new_item["images"].append(InlineImage(doc, resized_path, width=Mm(42)))
 
         flattened_photo_evidence.append(new_item)
 
